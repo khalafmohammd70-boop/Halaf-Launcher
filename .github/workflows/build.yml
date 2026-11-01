@@ -1,7 +1,11 @@
 
 name: Build Halaf Launcher APK
 
-on: [push, workflow_dispatch]
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -13,24 +17,30 @@ jobs:
 
       - name: Find and extract project ZIP
         run: |
-          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" -print -quit)
+          ZIP_FILE="./Halaf_Launcher_Project_for_GitHub.zip"
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "Project ZIP not found"
+          echo "Checking project ZIP..."
+          ls -la
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: Project ZIP not found: $ZIP_FILE"
             exit 1
           fi
 
           mkdir -p /tmp/halaf-source
           unzip -q "$ZIP_FILE" -d /tmp/halaf-source
 
-          PROJECT_DIR=$(dirname "$(find /tmp/halaf-source -name settings.gradle.kts -print -quit)")
+          SETTINGS_FILE=$(find /tmp/halaf-source -name settings.gradle.kts -print -quit)
 
-          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
-            echo "Gradle project not found"
+          if [ -z "$SETTINGS_FILE" ]; then
+            echo "ERROR: settings.gradle.kts not found inside ZIP"
             exit 1
           fi
 
+          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+          echo "Project found at: $PROJECT_DIR"
 
       - name: Set up Java
         uses: actions/setup-java@v4
