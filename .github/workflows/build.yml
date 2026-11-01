@@ -13,14 +13,23 @@ jobs:
 
       - name: Find and extract project ZIP
         run: |
-          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" | head -n 1)
+          ZIP_FILE=$(find . -maxdepth 2 -name "*.zip" -print -quit)
+
           if [ -z "$ZIP_FILE" ]; then
             echo "Project ZIP not found"
             exit 1
           fi
+
           mkdir -p /tmp/halaf-source
           unzip -q "$ZIP_FILE" -d /tmp/halaf-source
-          PROJECT_DIR=$(dirname "$(find /tmp/halaf-source -name settings.gradle.kts | head -n 1)")
+
+          PROJECT_DIR=$(dirname "$(find /tmp/halaf-source -name settings.gradle.kts -print -quit)")
+
+          if [ ! -f "$PROJECT_DIR/settings.gradle.kts" ]; then
+            echo "Gradle project not found"
+            exit 1
+          fi
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
       - name: Set up Java
@@ -31,9 +40,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        with:
+          packages: |
+            platforms;android-35
+            build-tools;35.0.0
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -48,4 +58,4 @@ jobs:
         with:
           name: Halaf-Launcher-APK
           path: /tmp/halaf-source/**/app/build/outputs/apk/debug/app-debug.apk
-
+          if-no-files-found: error
