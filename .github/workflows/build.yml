@@ -1,4 +1,3 @@
-
 name: Build Halaf Launcher APK
 
 on:
@@ -17,7 +16,7 @@ jobs:
 
       - name: Find and extract project ZIP
         run: |
-          ZIP_FILE="./Halaf_Launcher_Project_for_GitHub.zip"
+          ZIP_FILE="./Halaf_Launcher_v0.2_DefaultWallpaper.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "Project ZIP not found"
