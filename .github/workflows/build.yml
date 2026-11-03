@@ -1,3 +1,4 @@
+
 name: Build Halaf Launcher APK
 
 on:
@@ -23,8 +24,42 @@ jobs:
           fi
           mkdir -p /tmp/halaf-source
           unzip -q "$ZIP_FILE" -d /tmp/halaf-source
-          PROJECT_DIR=$(dirname "$(find /tmp/halaf-source -name settings.gradle.kts | head -n 1)")
+          PROJECT_DIR=$(dirname "$(find /tmp/halaf-source -name settings.gradle.kts -o -name settings.gradle | head -n 1)")
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Align Java and Kotlin versions
+        run: |
+          APP_DIR="$PROJECT_DIR/app"
+          if [ -f "$APP_DIR/build.gradle.kts" ]; then
+            cat >> "$APP_DIR/build.gradle.kts" <<'EOF'
+
+          android {
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+          }
+          EOF
+          elif [ -f "$APP_DIR/build.gradle" ]; then
+            cat >> "$APP_DIR/build.gradle" <<'EOF'
+
+          android {
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions {
+                  jvmTarget = '17'
+              }
+          }
+          EOF
+          else
+            echo "App Gradle file not found"
+            exit 1
+          fi
 
       - name: Set up Java
         uses: actions/setup-java@v4
