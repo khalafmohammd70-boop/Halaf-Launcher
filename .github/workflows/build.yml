@@ -16,7 +16,7 @@ jobs:
 
       - name: Find and extract project ZIP
         run: |
-          ZIP_FILE="./Halaf_Launcher_v0.2_DefaultWallpaper.zip"
+          ZIP_FILE="./Halaf_Launcher_v0.3_six_wallpapers.zip"
 
           if [ ! -f "$ZIP_FILE" ]; then
             echo "Project ZIP not found"
