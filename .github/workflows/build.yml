@@ -1,80 +1,431 @@
+package com.halaf.launcher
 
-name: Build Halaf Launcher APK
+import android.content.Intent
+import android.net.Uri
+import android.graphics.BitmapFactory
+import android.content.pm.PackageManager
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.text.style.TextAlign
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+data class TvApp(val label: String, val packageName: String, val icon: android.graphics.drawable.Drawable)
 
-jobs:
-  build:
-    runs-on: ubuntu-latest
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { HalafHome() }
+    }
+}
 
-    steps:
-      - name: Get project files
-        uses: actions/checkout@v4
+@Composable
+fun HalafHome() {
+    val context = LocalContext.current
+    var apps by remember { mutableStateOf(emptyList<TvApp>()) }
+    var showSettings by remember { mutableStateOf(false) }
+    var showCustomization by remember { mutableStateOf(false) }
+    var selectedSection by remember { mutableStateOf("الرئيسية") }
+    var theme by remember { mutableStateOf("blue") }
+    var language by remember { mutableStateOf("ar") }
+    val prefs = remember { context.getSharedPreferences("halaf_settings", android.content.Context.MODE_PRIVATE) }
+    var widgetTypes by remember { mutableStateOf(prefs.getString("widgets", "clock,date")!!.split(",").filter { it.isNotBlank() }.distinct()) }
+    var largeWidgets by remember { mutableStateOf(prefs.getBoolean("large_widgets", false)) }
+    var appTileSize by remember { mutableStateOf(prefs.getInt("app_tile_size", 142)) }
+    var appsPerRow by remember { mutableStateOf(prefs.getInt("apps_per_row", 6).coerceIn(3, 8)) }
+    var iconShape by remember { mutableStateOf(prefs.getString("icon_shape", "rounded") ?: "rounded") }
+    var showWidgetPicker by remember { mutableStateOf(false) }
+    fun saveWidgets(items: List<String>) {
+        widgetTypes = items.distinct()
+        prefs.edit().putString("widgets", widgetTypes.joinToString(",")).apply()
+    }
+    var wallpaperUri by remember { mutableStateOf(prefs.getString("wallpaper_uri", null)?.let(Uri::parse)) }
+    var selectedWallpaper by remember { mutableStateOf(prefs.getString("selected_wallpaper", "neon") ?: "neon") }
+    var wallpaperBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    val wallpaperPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: SecurityException) { }
+            wallpaperUri = uri
+            prefs.edit().putString("wallpaper_uri", uri.toString()).apply()
+        }
+    }
 
-      - name: Find and extract project ZIP
-        run: |
-          ZIP_FILE="./Halaf_Launcher_v0.4_step2_download.zip"
+    LaunchedEffect(wallpaperUri) {
+        wallpaperBitmap = wallpaperUri?.let { uri ->
+            withContext(Dispatchers.IO) {
+                try { context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it) } }
+                catch (_: Exception) { null }
+            }
+        }
+    }
 
-          if [ ! -f "$ZIP_FILE" ]; then
-            echo "Project ZIP not found"
-            ls -la
-            exit 1
-          fi
+    val accent = when (theme) {
+        "purple" -> Color(0xFFB66CFF)
+        "red" -> Color(0xFFFF555D)
+        else -> Color(0xFF258BFF)
+    }
+    val bg = Brush.verticalGradient(listOf(Color(0xFF101827), Color(0xFF05080F)))
 
-          mkdir -p /tmp/halaf-source
-          unzip -q "$ZIP_FILE" -d /tmp/halaf-source
+    LaunchedEffect(Unit) {
+        apps = withContext(Dispatchers.IO) {
+            val pm = context.packageManager
+            val intent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            @Suppress("DEPRECATION")
+            pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
+                .mapNotNull { info ->
+                    val packageName = info.activityInfo?.packageName ?: return@mapNotNull null
+                    if (packageName == context.packageName) return@mapNotNull null
+                    TvApp(info.loadLabel(pm).toString(), packageName, info.loadIcon(pm))
+                }
+                .distinctBy { it.packageName }
+                .sortedBy { it.label.lowercase() }
+        }
+    }
 
-          SETTINGS_FILE=$(find /tmp/halaf-source -name settings.gradle.kts -print -quit)
-
-          if [ -z "$SETTINGS_FILE" ]; then
-            echo "Gradle project not found"
-            exit 1
-          fi
-
-          PROJECT_DIR=$(dirname "$SETTINGS_FILE")
-          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-
-      - name: Set up Java
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: "17"
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: 'platform-tools'
-
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.9"
-
-      - name: Fix Java and Kotlin versions
-        run: |
-          cat >> "$PROJECT_DIR/app/build.gradle.kts" <<'EOF'
-
-          android {
-              compileOptions {
-                  sourceCompatibility = JavaVersion.VERSION_17
-                  targetCompatibility = JavaVersion.VERSION_17
+    MaterialTheme {
+        Box(Modifier.fillMaxSize()) {
+            if (wallpaperBitmap != null) {
+                Image(bitmap = wallpaperBitmap!!.asImageBitmap(), contentDescription = null,
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Color(0x9905080F)))
+            } else {
+                val presetWallpaper = when (selectedWallpaper) {
+                    "mountain" -> R.drawable.wallpaper_mountain
+                    "moon" -> R.drawable.wallpaper_moon
+                    "rose" -> R.drawable.wallpaper_rose
+                    "beach" -> R.drawable.wallpaper_beach
+                    "snow" -> R.drawable.wallpaper_snow
+                    else -> R.drawable.wallpaper_neon
+                }
+                Image(painter = painterResource(presetWallpaper), contentDescription = "Halaf Launcher wallpaper",
+                    modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                Box(Modifier.fillMaxSize().background(Color(0x5505080F)))
+            }
+            Row(Modifier.fillMaxSize().padding(horizontal = 28.dp, vertical = 22.dp)) {
+              Column(Modifier.width(190.dp).fillMaxHeight().padding(end = 22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("HALAF", color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Black, letterSpacing = 2.sp)
+                Text("LAUNCHER", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 4.sp)
+                Spacer(Modifier.height(22.dp))
+                listOf("الرئيسية", "التطبيقات", "الألعاب", "البث المباشر", "المفضلة", "الإعدادات").forEach { section ->
+                  Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp))
+                    .background(if (selectedSection == section) Color(0x663B8DFF) else Color(0x22263850))
+                    .border(if (selectedSection == section) 2.dp else 1.dp, if (selectedSection == section) accent else Color(0x334F6580), RoundedCornerShape(14.dp))
+                    .clickable { selectedSection = section; if (section == "الإعدادات") showSettings = true }
+                    .focusable().padding(horizontal = 14.dp, vertical = 13.dp)) { Text(section, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold) }
+                }
               }
-              kotlinOptions {
-                  jvmTarget = "17"
+              Column(Modifier.weight(1f).fillMaxHeight()) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.weight(1f)) {
+                        Text("HALAF", color = Color.White, fontSize = 30.sp, fontWeight = FontWeight.Black, letterSpacing = 3.sp)
+                        Text("LAUNCHER", color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 5.sp)
+                    }
+                    Text(SimpleDateFormat("EEE, dd MMM  •  HH:mm", Locale.getDefault()).format(Date()),
+                        color = Color(0xFFB9C5D6), fontSize = 17.sp)
+                    Spacer(Modifier.width(22.dp))
+                    GlassAction("⚙  الإعدادات", accent) { showSettings = true }
+                }
+
+                Spacer(Modifier.height(20.dp))
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    widgetTypes.forEachIndexed { index, type ->
+                        HalafWidgetCard(type = type, accent = accent, large = largeWidgets,
+                            onRemove = { saveWidgets(widgetTypes.filterIndexed { i, _ -> i != index }) },
+                            onMove = { direction ->
+                                val target = (index + direction).coerceIn(0, widgetTypes.lastIndex)
+                                if (target != index) { val reordered = widgetTypes.toMutableList(); val item = reordered.removeAt(index); reordered.add(target, item); saveWidgets(reordered) }
+                            })
+                    }
+                }
+                Spacer(Modifier.height(22.dp))
+                Text(if (language == "ar") "تطبيقاتك" else if (language == "tr") "Uygulamalarınız" else if (language == "fr") "Vos applications" else "Your apps",
+                    color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(18.dp))
+
+                if (apps.isEmpty()) {
+                    Text("جارٍ تحميل التطبيقات…", color = Color.LightGray, fontSize = 18.sp)
+                } else {
+                    LazyColumn(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                        items(apps.chunked(appsPerRow)) { rowApps ->
+                            Row(
+                                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                horizontalArrangement = Arrangement.spacedBy(18.dp)
+                            ) {
+                                rowApps.forEach { app ->
+                                    AppTile(app = app, accent = accent, tileWidth = appTileSize, iconShape = iconShape, onLongClick = { showSettings = true }) {
+                                        val launch = context.packageManager.getLaunchIntentForPackage(app.packageName)
+                                        if (launch != null) context.startActivity(launch)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
               }
-          }
-          EOF
+            }
+            Text("HALAF LAUNCHER  •  v0.4.0", modifier = Modifier.align(Alignment.BottomEnd),
+                color = Color(0xFF526176), fontSize = 10.sp, letterSpacing = 1.5.sp)
+        }
+    }
 
-      - name: Build APK
-        run: gradle -p "$PROJECT_DIR" assembleDebug
+    if (showSettings) {
+        Dialog(onDismissRequest = { showSettings = false }) {
+            Column(
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(26.dp))
+                    .background(Color(0xF0182233)).border(1.dp, Color(0x553B9DFF), RoundedCornerShape(26.dp))
+                    .padding(26.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text("إعدادات Halaf Launcher", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                Text("الثيم", color = Color(0xFFB8C7D9), fontSize = 16.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    ThemeChoice("أزرق", Color(0xFF258BFF), theme == "blue") { theme = "blue" }
+                    ThemeChoice("أرجواني", Color(0xFFB66CFF), theme == "purple") { theme = "purple" }
+                    ThemeChoice("أحمر", Color(0xFFFF555D), theme == "red") { theme = "red" }
+                }
+                Text("اللغة", color = Color(0xFFB8C7D9), fontSize = 16.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    listOf("العربية" to "ar", "Türkçe" to "tr", "English" to "en", "Français" to "fr").forEach { (label, code) ->
+                        ThemeChoice(label, accent, language == code) { language = code }
+                    }
+                }
+                Text("الأرقام: 0 1 2 3 4 5 6 7 8 9", color = Color.White, fontSize = 15.sp)
+                Text("تخصيص التطبيقات", color = Color(0xFFB8C7D9), fontSize = 16.sp)
+                Text("حجم بطاقة التطبيق: ${appTileSize}dp", color = Color.White, fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(118, 142, 166).forEach { size ->
+                        ThemeChoice("${size}dp", accent, appTileSize == size) {
+                            appTileSize = size; prefs.edit().putInt("app_tile_size", size).apply()
+                        }
+                    }
+                }
+                Text("عدد التطبيقات في الصف: $appsPerRow", color = Color.White, fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    (3..8).forEach { count ->
+                        ThemeChoice(count.toString(), accent, appsPerRow == count) {
+                            appsPerRow = count; prefs.edit().putInt("apps_per_row", count).apply()
+                        }
+                    }
+                }
+                Text("شكل الأيقونات", color = Color.White, fontSize = 14.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("square" to "مربع", "rounded" to "مستدير", "circle" to "دائري").forEach { (shape, label) ->
+                        ThemeChoice(label, accent, iconShape == shape) {
+                            iconShape = shape; prefs.edit().putString("icon_shape", shape).apply()
+                        }
+                    }
+                }
+                Text("الخلفيات الأساسية", color = Color(0xFFB8C7D9), fontSize = 16.sp)
+                val wallpaperOptions = listOf(
+                    Triple("mountain", "الجبال", R.drawable.wallpaper_mountain),
+                    Triple("moon", "القمر", R.drawable.wallpaper_moon),
+                    Triple("neon", "نيون أزرق/بنفسجي", R.drawable.wallpaper_neon),
+                    Triple("rose", "الوردة", R.drawable.wallpaper_rose),
+                    Triple("beach", "الشاطئ", R.drawable.wallpaper_beach),
+                    Triple("snow", "الثلج", R.drawable.wallpaper_snow)
+                )
+                wallpaperOptions.chunked(3).forEach { rowItems ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        rowItems.forEach { (key, label, imageId) ->
+                            Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                                .border(if (selectedWallpaper == key && wallpaperUri == null) 3.dp else 1.dp,
+                                    if (selectedWallpaper == key && wallpaperUri == null) accent else Color(0x557F91A8), RoundedCornerShape(12.dp))
+                                .clickable {
+                                    selectedWallpaper = key
+                                    wallpaperUri = null
+                                    wallpaperBitmap = null
+                                    prefs.edit().putString("selected_wallpaper", key).remove("wallpaper_uri").apply()
+                                }.padding(5.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Image(painter = painterResource(imageId), contentDescription = label,
+                                    modifier = Modifier.fillMaxWidth().height(58.dp).clip(RoundedCornerShape(8.dp)),
+                                    contentScale = ContentScale.Crop)
+                                Text(label, color = Color.White, fontSize = 11.sp, textAlign = TextAlign.Center)
+                            }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    GlassAction("اختيار صورة من الجهاز أو USB", accent) { wallpaperPicker.launch(arrayOf("image/*")) }
+                    if (wallpaperUri != null) {
+                        GlassAction("العودة للخلفية الأساسية", accent) {
+                            try { context.contentResolver.releasePersistableUriPermission(wallpaperUri!!, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                            catch (_: Exception) { }
+                            wallpaperUri = null
+                            wallpaperBitmap = null
+                            selectedWallpaper = "neon"
+                            prefs.edit().remove("wallpaper_uri").putString("selected_wallpaper", "neon").apply()
+                        }
+                    }
+                }
+                Text("الخلفية رقم 3 (الأزرق والبنفسجي) هي الافتراضية. اختيارك يُحفظ تلقائياً.",
+                    color = Color(0xFF9EADC0), fontSize = 13.sp)
+                Text("الويدجت", color = Color(0xFFB8C7D9), fontSize = 16.sp)
+                GlassAction("إدارة الودجات وإضافتها", accent) { showWidgetPicker = true }
+                GlassAction(if (largeWidgets) "تصغير الويدجت" else "تكبير الويدجت", accent) {
+                    largeWidgets = !largeWidgets
+                    prefs.edit().putBoolean("large_widgets", largeWidgets).apply()
+                }
+                GlassAction("إغلاق", accent) { showSettings = false }
+            }
+        }
+    }
 
-      - name: Save APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Halaf-Launcher-v0.4-APK
-          path: /tmp/halaf-source/**/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+    if (showWidgetPicker) {
+        AlertDialog(
+            onDismissRequest = { showWidgetPicker = false },
+            containerColor = Color(0xF0182233),
+            title = { Text("إضافة ويدجت", color = Color.White) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("clock" to "الساعة", "date" to "التاريخ", "prayer" to "مواقيت الصلاة", "sports" to "نتائج الرياضة").forEach { (id, label) ->
+                        TextButton(onClick = {
+                            if (id !in widgetTypes) saveWidgets(widgetTypes + id)
+                            showWidgetPicker = false
+                        }) { Text(if (id in widgetTypes) "$label ✓" else "+ $label", color = Color.White) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showWidgetPicker = false }) { Text("إغلاق", color = Color.White) } }
+        )
+    }
+}
+
+
+@Composable
+fun HalafWidgetCard(
+    type: String,
+    accent: Color,
+    large: Boolean,
+    onRemove: () -> Unit,
+    onMove: (Int) -> Unit
+) {
+    val title = when (type) {
+        "clock" -> "الساعة"
+        "date" -> "التاريخ"
+        "prayer" -> "مواقيت الصلاة"
+        "sports" -> "الرياضة"
+        else -> type
+    }
+    val value = when (type) {
+        "clock" -> SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+        "date" -> SimpleDateFormat("EEE، dd MMM", Locale("ar")).format(Date())
+        "prayer" -> "أضف مدينة للحصول على المواقيت"
+        "sports" -> "لا توجد نتائج مباشرة بعد"
+        else -> ""
+    }
+    Column(
+        Modifier.width(if (large) 220.dp else 164.dp).clip(RoundedCornerShape(18.dp))
+            .background(Color(0x77304460)).border(1.dp, accent.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+            .padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)
+    ) {
+        Text(title, color = Color(0xFFBFD9F7), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        Text(value, color = Color.White, fontSize = if (large) 19.sp else 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+        Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            TextButton(onClick = { onMove(-1) }) { Text("◀", color = Color.White) }
+            TextButton(onClick = { onMove(1) }) { Text("▶", color = Color.White) }
+            TextButton(onClick = onRemove) { Text("×", color = Color(0xFFFF8A8A)) }
+        }
+    }
+}
+
+fun drawablePainter(drawable: android.graphics.drawable.Drawable): androidx.compose.ui.graphics.painter.BitmapPainter {
+    val width = drawable.intrinsicWidth.coerceAtLeast(1)
+    val height = drawable.intrinsicHeight.coerceAtLeast(1)
+    val bitmap = android.graphics.Bitmap.createBitmap(
+        width, height, android.graphics.Bitmap.Config.ARGB_8888
+    )
+    val canvas = android.graphics.Canvas(bitmap)
+    drawable.setBounds(0, 0, canvas.width, canvas.height)
+    drawable.draw(canvas)
+    return androidx.compose.ui.graphics.painter.BitmapPainter(bitmap.asImageBitmap())
+}
+
+@Composable
+@OptIn(ExperimentalFoundationApi::class)
+fun AppTile(app: TvApp, accent: Color, tileWidth: Int = 142, iconShape: String = "rounded", onLongClick: () -> Unit = {}, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Column(
+        Modifier.width((tileWidth + 28).dp).onFocusChanged { focused = it.isFocused }
+            .clip(RoundedCornerShape(22.dp))
+            .background(if (focused) Color(0x553B8DFF) else Color(0x331C2B40))
+            .border(if (focused) 2.dp else 1.dp, if (focused) accent else Color(0x445F7898), RoundedCornerShape(22.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick).focusable().padding(14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        androidx.compose.foundation.Image(
+            painter = remember(app.icon) { drawablePainter(app.icon) },
+            contentDescription = app.label,
+            modifier = Modifier.size((tileWidth * 0.46f).dp).clip(when (iconShape) {
+                "circle" -> androidx.compose.foundation.shape.CircleShape
+                "square" -> RoundedCornerShape(5.dp)
+                else -> RoundedCornerShape(16.dp)
+            })
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(app.label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium,
+            maxLines = 1, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+fun GlassAction(label: String, accent: Color, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    Box(
+        Modifier.onFocusChanged { focused = it.isFocused }.clip(RoundedCornerShape(16.dp))
+            .background(Color(0x44263D59))
+            .border(if (focused) 2.dp else 1.dp, if (focused) accent else Color(0x555F7898), RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick).focusable().padding(horizontal = 18.dp, vertical = 12.dp)
+    ) { Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold) }
+}
+
+@Composable
+fun ThemeChoice(label: String, color: Color, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.clip(RoundedCornerShape(12.dp)).background(color.copy(alpha = if (selected) 0.35f else 0.12f))
+            .border(if (selected) 2.dp else 1.dp, color, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick).focusable().padding(horizontal = 12.dp, vertical = 10.dp)
+    ) { Text(label, color = Color.White, fontSize = 13.sp) }
+}
